@@ -1,620 +1,238 @@
 
-`timescale 1ns/1ns
-//
-// Copyright (C) 2019 Massachusetts Institute of Technology
-//
-// File         : md5_top_axi4lite.v
-// Project      : Common Evaluation Platform (CEP)
-// Description  : This file provides an axi4-lite wrapper for the wishbone based-MD5 core
-//
-
-module md5_top_axi4lite (
-
-    // Clock & Reset
-    clk_i,
-    rst_ni,    
-
-    o_axi_awready,
-    i_axi_awaddr, 
-    i_axi_awcache, 
-    i_axi_awprot, 
-    i_axi_awvalid,
-
-    o_axi_wready, 
-    i_axi_wdata, 
-    i_axi_wstrb, 
-    i_axi_wvalid,
-
-    o_axi_bresp, 
-    o_axi_bvalid, 
-    i_axi_bready,
-    
-    o_axi_arready,
-    i_axi_araddr,
-    i_axi_arcache,
-    i_axi_arprot,
-    i_axi_arvalid,
-
-    o_axi_rresp,
-    o_axi_rvalid,
-    o_axi_rdata,
-    i_axi_rready,
-
-    //Master Full Interface
-	TXN_DONE,
-	ERROR,
-
-	M_AXI_ACLK,
-	M_AXI_ARESETN,
-	M_AXI_AWID,
-	M_AXI_AWADDR,
-	M_AXI_AWLEN,
-	M_AXI_AWSIZE,
-	M_AXI_AWBURST,
-	M_AXI_AWLOCK,
-	M_AXI_AWCACHE,
-	M_AXI_AWPROT,
-	M_AXI_AWQOS,
-	M_AXI_AWUSER,
-	M_AXI_AWVALID,
-	M_AXI_AWREADY,
-
-	M_AXI_WDATA,
-	M_AXI_WSTRB,
-	M_AXI_WLAST,
-	M_AXI_WUSER,
-	M_AXI_WVALID,
-	M_AXI_WREADY,
-
-	M_AXI_BID,
-	M_AXI_BRESP,
-	M_AXI_BUSER,
-	M_AXI_BVALID,
-	M_AXI_BREADY,
-
-	M_AXI_ARID,
-	M_AXI_ARADDR,
-	M_AXI_ARLEN,
-	M_AXI_ARSIZE,
-	M_AXI_ARBURST,
-	M_AXI_ARLOCK,
-	M_AXI_ARCACHE,
-	M_AXI_ARPROT,
-	M_AXI_ARQOS,
-	M_AXI_ARUSER,
-	M_AXI_ARVALID,
-	M_AXI_ARREADY,
-
-	M_AXI_RID,
-	M_AXI_RDATA,
-	M_AXI_RRESP,
-	M_AXI_RLAST,
-	M_AXI_RUSER,
-	M_AXI_RVALID,
-	M_AXI_RREADY,
-
-    md5_reg_rden,
-    md5_reg_wren,
-	ip_buf_rdata,
-
-	// Wishbone slave wires
-    wb_rst,
-    wbs_adr_i,
-	wbs_dat_i,
-    wbs_sel_i,
-    wbs_we_i,
-    wbs_cyc_i,
-    wbs_stb_i,
-    wbs_dat_o,
-    wbs_err_o,
-    wbs_ack_o
-);
-    //--------------------------------------------------------------
-    //----------LOCAL VARIBALES & PARAMETERS-----------START--------
-    //--------------------------------------------------------------
-
-
-	parameter C_AXI_DATA_WIDTH  = 32;   // Width of the AXI R&W data
-    parameter C_AXI_ADDR_WIDTH  = 32;   // AXI Address width
-    
-    //AXI MASTER PARAMETERs
-    // Base address of targeted slave
-    parameter  C_M_TARGET_SLAVE_BASE_ADDR	= 32'h00000000; //MR changed from 32'h40000000 to 32'h40000000
-    // Burst Length. Supports 1, 2, 4, 8, 16, 32, 64, 128, 256 burst lengths
-    parameter integer C_M_AXI_BURST_LEN	= 256;
-    // Thread ID Width
-    parameter integer C_M_AXI_ID_WIDTH	= 2;
-    // Width of Address Bus
-    parameter integer C_M_AXI_ADDR_WIDTH	= 32;
-    // Width of Data Bus
-    parameter integer C_M_AXI_DATA_WIDTH	= 32;
-    // Width of User Write Address Bus
-    parameter integer C_M_AXI_AWUSER_WIDTH	= 0;
-    // Width of User Read Address Bus
-    parameter integer C_M_AXI_ARUSER_WIDTH	= 0;
-    // Width of User Write Data Bus
-    parameter integer C_M_AXI_WUSER_WIDTH	= 0;
-    // Width of User Read Data Bus
-    parameter integer C_M_AXI_RUSER_WIDTH	= 0;
-    // Width of User Response Bus
-    parameter integer C_M_AXI_BUSER_WIDTH	= 0;
-
-    //-- Example-specific design signals
-	//-- local parameter for addressing 32 bit / 64 bit C_AXI_DATA_WIDTH
-	//-- ADDR_LSB is used for addressing 32/64 bit registers/memories
-	//-- ADDR_LSB = 2 for 32 bits (n downto 2)
-	//-- ADDR_LSB = 3 for 64 bits (n downto 3)
-
-	parameter ADDR_LSB  = (C_AXI_DATA_WIDTH/32)+ 1;
-	parameter OPT_MEM_ADDR_BITS = 1;
-        
-
-    // Clocks and Resets
-    input   wire                                clk_i;
-    input   wire                                rst_ni;
-
-
-    reg                                         o_axi_awready_val;
-    reg                                         o_axi_wready_val;
-    reg                                         o_axi_arready_val;
-    reg                                         o_axi_rvalid_val;
-    reg                                         o_axi_rresp_val;
-    reg [C_AXI_DATA_WIDTH-1:0]                  o_axi_rdata_val;
-
-    // AXI write address channel signals
-    output  wire                                o_axi_awready;  // Slave is ready to accept
-    input   wire    [C_AXI_ADDR_WIDTH-1:0]      i_axi_awaddr;   // Write address
-	input 	wire 								i_axi_awvalid;
-    input   wire    [3:0]                       i_axi_awcache;  // Write Cache type
-    input   wire    [2:0]                       i_axi_awprot;   // Write Protection type
-
-    // AXI write data channel signals
-    output  wire                                o_axi_wready;   // Write data ready
-	input 	wire 								i_axi_wvalid;
-    input   wire    [C_AXI_DATA_WIDTH-1:0]      i_axi_wdata;    // Write data
-    input   wire    [C_AXI_DATA_WIDTH/8-1:0]    i_axi_wstrb;    // Write strobes
-
-    // AXI write response channel signals
-    output  wire    [1:0]                       o_axi_bresp;    // Write response
-	output 	wire 								o_axi_bvalid;
-    input   wire                                i_axi_bready;   // Response ready
-
-    // AXI read address channel signals
-    output  wire                                o_axi_arready;  // Read address ready
-	input 	wire 								i_axi_arvalid;
-    input   wire    [C_AXI_ADDR_WIDTH-1:0]      i_axi_araddr;   // Read address
-    input   wire    [3:0]                       i_axi_arcache;  // Read Cache type
-    input   wire    [2:0]                       i_axi_arprot;   // Read Protection type
-
-    // AXI read data channel signals
-    output  wire [1:0]                          o_axi_rresp;    // Read response
-	output  wire 								o_axi_rvalid;
-    output  wire [C_AXI_DATA_WIDTH-1:0]         o_axi_rdata;    // Read data
-    input   wire                                i_axi_rready;   // Read Response ready
-
-
-    // AXI write address channel signals
-
-
-    //input  wire                                     INIT_AXI_TXN;
-    output wire                                     TXN_DONE;
-    output reg                                      ERROR;
-
-    input  wire                                     M_AXI_ACLK;
-    input  wire                                     M_AXI_ARESETN;
-
-    output wire      [C_M_AXI_ID_WIDTH-1 : 0]       M_AXI_AWID;
-    output wire      [C_M_AXI_ADDR_WIDTH-1 : 0]     M_AXI_AWADDR;
-    output wire      [7 : 0]                        M_AXI_AWLEN;
-    output wire      [2 : 0]                        M_AXI_AWSIZE;
-    output wire      [1 : 0]                        M_AXI_AWBURST;
-    output wire                                     M_AXI_AWLOCK;
-    output wire      [3 : 0]                        M_AXI_AWCACHE;
-    output wire      [2 : 0]                        M_AXI_AWPROT;
-    output wire      [3 : 0]                        M_AXI_AWQOS;
-    output wire      [C_M_AXI_AWUSER_WIDTH-1:0]     M_AXI_AWUSER;
-    output wire                                     M_AXI_AWVALID;
-    input  wire                                     M_AXI_AWREADY;
-
-    output wire      [C_M_AXI_DATA_WIDTH-1 : 0]     M_AXI_WDATA;
-    output wire      [C_M_AXI_DATA_WIDTH/8-1:0]     M_AXI_WSTRB;
-    output wire                                     M_AXI_WLAST;
-    output wire      [C_M_AXI_WUSER_WIDTH-1 :0]     M_AXI_WUSER;
-    output wire                                     M_AXI_WVALID;
-    input  wire                                     M_AXI_WREADY;
-
-    input  wire      [C_M_AXI_ID_WIDTH-1 : 0]       M_AXI_BID;
-    input  wire      [1 : 0]                        M_AXI_BRESP;
-    input  wire      [C_M_AXI_BUSER_WIDTH-1 :0]     M_AXI_BUSER;
-    input  wire                                     M_AXI_BVALID;
-    output wire                                     M_AXI_BREADY;
-
-    output wire      [C_M_AXI_ID_WIDTH-1 : 0]       M_AXI_ARID;
-    output wire      [C_M_AXI_ADDR_WIDTH-1 : 0]     M_AXI_ARADDR;
-    output wire      [7 : 0]                        M_AXI_ARLEN;
-    output wire      [2 : 0]                        M_AXI_ARSIZE;
-    output wire      [1 : 0]                        M_AXI_ARBURST;
-    output wire                                     M_AXI_ARLOCK;
-    output wire      [3 : 0]                        M_AXI_ARCACHE;
-    output wire      [2 : 0]                        M_AXI_ARPROT;
-    output wire      [3 : 0]                        M_AXI_ARQOS;
-    output wire      [C_M_AXI_ARUSER_WIDTH-1:0]     M_AXI_ARUSER;
-    output wire                                     M_AXI_ARVALID;
-    input  wire                                     M_AXI_ARREADY;
-
-    input  wire      [C_M_AXI_ID_WIDTH-1 : 0]       M_AXI_RID;
-    input  wire      [C_M_AXI_DATA_WIDTH-1 : 0]     M_AXI_RDATA;
-    input  wire      [1 : 0]                        M_AXI_RRESP;
-    input  wire                                     M_AXI_RLAST;
-    input  wire      [C_M_AXI_RUSER_WIDTH-1 :0]     M_AXI_RUSER;
-    input  wire                                     M_AXI_RVALID;
-    output wire                                     M_AXI_RREADY;
-
-
-	output wire                                  md5_reg_rden	;
-	output wire                                  md5_reg_wren	;
-
-
-	// Wishbone slave wires
-    input wire                                  wb_rst;
-    input wire [C_AXI_ADDR_WIDTH - 3:0]   		wbs_adr_i;
-    input wire [C_AXI_DATA_WIDTH - 1:0]  		wbs_dat_i;
-	input wire [3:0]                            wbs_sel_i;
-    input wire                                  wbs_we_i;
-    input wire                              	wbs_cyc_i;
-    input wire                              	wbs_stb_i;
-    output wire [C_AXI_DATA_WIDTH - 1:0]    	wbs_dat_o;
-    output wire 								wbs_err_o;
-    output wire                                 wbs_ack_o;
-
-
-	//------------------------------------------------
-	//---- Signals for user logic register space 
-	//------------------------------------------------
-	//---- Number of Registers 3 
-
-	reg [C_AXI_DATA_WIDTH-1 : 0] md5_reg0	; //control register to initiate the master
-	reg [C_AXI_DATA_WIDTH-1 : 0] md5_reg1	; //source address register
-	reg [C_AXI_DATA_WIDTH-1 : 0] md5_reg2	; //destination address register
-
-
-	reg [C_M_AXI_DATA_WIDTH-1 : 0] reg_data_out	;
-	reg                            aw_en ;
-
-	integer byte_index	;
-
-    
-
-	wire                           	    INIT_AXI_TXN; //made it a local variable instead of an input
-
-    //pancham related variables
-    reg [C_M_AXI_ID_WIDTH-1:0]          ip_buf_arid;
-    output reg [C_M_AXI_DATA_WIDTH-1 :0]       ip_buf_rdata;
-    reg [C_M_AXI_ID_WIDTH-1:0]          op_buf_awid;
-    reg [C_M_AXI_DATA_WIDTH-1 :0]       op_buf_wdata;
-
-    //--------------------------------------------------------------
-    //----------LOCAL VARIBALES & PARAMETERS-----------END----------
-    //--------------------------------------------------------------
-
-
-
-
-    // Instantiate the wishbone-based MD5 Core
-    md5_top_wb #(
-        .AW 			(C_AXI_ADDR_WIDTH - 2),
-        .DW 			(C_AXI_DATA_WIDTH)
-    ) md5_top_wb_inst (
-        // Wishbone Slave interface
-        .wb_clk_i       (clk_i),
-        .wb_rst_i       (wb_rst),
-        .wb_dat_i       (wbs_dat_i),
-        .wb_adr_i       (wbs_adr_i),
-        .wb_sel_i       (wbs_sel_i[3:0]),
-        .wb_we_i        (wbs_we_i),
-        .wb_cyc_i       (wbs_cyc_i),
-        .wb_stb_i       (wbs_stb_i),
-        .wb_dat_o       (wbs_dat_o),
-        .wb_err_o       (wbs_err_o),
-        .wb_ack_o       (wbs_ack_o),
-
-        // Processor interrupt
-        .int_o          ()
-    );
-
-
-
-    //--------------------------------------------------------------
-    //----------REGISTER ACCESS LOGIC--AXO SLV---------START--------
-    //--------------------------------------------------------------
-    
-    
-    assign o_axi_awready = o_axi_awready_val;
-    assign o_axi_wready  = o_axi_wready_val;
-    assign o_axi_arready = o_axi_arready_val;
-    assign o_axi_rvalid  = o_axi_rvalid_val;
-    assign o_axi_rresp   = o_axi_rresp_val;
-    assign o_axi_rdata   = o_axi_rdata_val;
-
- 
-
-    // Implement memory mapped register select and write logic generation
-    // The write data is accepted and written to memory mapped registers when
-    // axi_awready, S_AXI_WVALID, axi_wready and S_AXI_WVALID are asserted. Write strobes are used to
-    // select byte enables of slave registers while writing.
-    // These registers are cleared when reset (active low) is applied.
-    // and the slave is ready to accept the write address and write data.
-
-
-    //Implement axi_awready generation "AWREADY"
-	always @(posedge clk_i) begin
-        if (!rst_ni) begin
-            o_axi_awready_val <= 0;
-            aw_en <= 1;
-        end
-        else begin
-            if ((o_axi_awready == 0) && (i_axi_awvalid == 1) && (i_axi_wvalid == 1) && (aw_en == 1)) begin
-                o_axi_awready_val <= 1;  
-            end
-            else if ((i_axi_bready == 1) && (o_axi_bvalid == 1)) begin
-	            aw_en <= 1;
-	        	o_axi_awready_val <= 0;  
-            end      
-            else begin
-                o_axi_awready_val <= 0;
-            end
-        end                  
-	end 
-
-
-    //Implement axi_wready generation "WREADY"
-	always @(posedge clk_i) begin
-        if (!rst_ni)
-            o_axi_wready_val <=0;
-        else begin
-            if ((o_axi_wready == 0) && (i_axi_wvalid == 1) && (i_axi_awvalid == 1) && (aw_en == 1)) begin
-                o_axi_wready_val <= 1;  
-            end   
-            else begin
-                o_axi_wready_val <= 0;
-            end
-        end                  
-	end
-
-    assign md5_reg_wren = o_axi_wready && i_axi_wvalid && o_axi_awready && i_axi_awvalid ; 
-
-    reg [OPT_MEM_ADDR_BITS:0]  loc_wr_addr, loc_rd_addr ; 
-
-    always @(posedge clk_i or negedge rst_ni)  
-    begin
-        if (!rst_ni) begin
-            md5_reg0 <= 'h0;
-            md5_reg1 <= 'h0;
-            md5_reg2 <= 'h0;
-        end
-
-        else begin
-            loc_wr_addr = i_axi_awaddr[ADDR_LSB + OPT_MEM_ADDR_BITS : ADDR_LSB];
-
-            if (md5_reg_wren == 1) begin
-            case (loc_wr_addr) 
-
-                2'b00: begin
-                    md5_reg0 <= i_axi_wdata;
-                    //INIT_AXI_TXN <= md5_reg0;
-                end
-
-                2'b01: begin
-                    md5_reg1 <= i_axi_wdata;
-                end
-
-                2'b10: begin
-                    md5_reg2 <= i_axi_wdata;  
-                end
-
-                default: begin
-                    md5_reg0 <= 0;
-                    md5_reg1 <= 0;
-                    md5_reg2 <= 0;
-                end
-
-            endcase
-            end
-        end
-    end
-
-    // Implement memory mapped register select and read logic generation
-    // and the slave is ready to accept the read address.
-
-    //Implement axi_arready generation "ARREADY"
-	always @(posedge clk_i) begin
-        if (!rst_ni)
-            o_axi_arready_val <=0;
-        else begin
-            if ((o_axi_arready == 0) && (i_axi_arvalid == 1)) begin
-                o_axi_arready_val <= 1;  
-            end        
-            else begin
-                o_axi_arready_val <= 0;
-            end
-        end                  
-	end 
-
-    //Implement axi_rvalid generation "RVALID"
-	always @(posedge clk_i) begin
-        if (!rst_ni) begin
-            o_axi_rvalid_val <=0;
-            o_axi_rresp_val  <= 00; // 'OKAY' response
-        end
-        else begin
-            if ((o_axi_arready == 1) && (i_axi_arvalid == 1) && (o_axi_rvalid == 0)) begin
-                o_axi_rvalid_val <= 1; 
-                o_axi_rresp_val  <= 00; // 'OKAY' response 
-            end        
-            else if((o_axi_rvalid == 1) && (i_axi_rready == 1)) begin
-                o_axi_rvalid_val <= 0;
-            end
-        end                  
-	end 
-
-    assign md5_reg_rden = o_axi_arready && i_axi_arvalid && (!o_axi_rvalid) ; //Mahima-?
-
-    always @(posedge clk_i or negedge rst_ni)  
-    begin
-		loc_rd_addr <= i_axi_araddr[ADDR_LSB + OPT_MEM_ADDR_BITS : ADDR_LSB];
-		if(md5_reg_rden) begin
-			case (loc_rd_addr)  
-				2'b00 :   reg_data_out <= md5_reg0;
-				2'b01 :   reg_data_out <= md5_reg1;
-				2'b10 :   reg_data_out <= md5_reg2;
-				default : reg_data_out <= 'h0;
-        endcase
-		end
-    end
- 
-    //-- Output register or memory read data
-    always @(posedge clk_i or negedge rst_ni)  
-    begin
-        if (!rst_ni)
-            o_axi_rdata_val <= 'h0;
-        else begin
-        	if (md5_reg_rden == 1) 
-                o_axi_rdata_val <= reg_data_out;     //-- register read data
-        end
-    end 
-
-
-    //--------------------------------------------------------------
-    //----------REGISTER ACCESS LOGIC------------------END--------
-    //--------------------------------------------------------------
-
-
-    //--------------------------------------------------------------
-    //----------AXI4 MASTER INITIATION LOGIC------------START-------
-    //--------------------------------------------------------------
-
-	assign INIT_AXI_TXN = (md5_reg0) ? 1:0;
-
-    //--------------------------------------------------------------
-    //----------AXI4 MASTER INITIATION LOGIC--------------END-------
-    //--------------------------------------------------------------
-
-
-    //--------------------------------------------------------------
-    //----------AXI4 MASTER PANCHAM INTERACTION------------START----
-    //--------------------------------------------------------------
-
-    // ip_buf = internal buffer of pancham
-    // op_buf = output buffer of pancham
-    /*always @(posedge clk_i or negedge rst_ni)  begin
-        op_buf_wdata <= ip_buf_rdata;
-        op_buf_awid  <= 1;
-        ip_buf_arid  <= 1;
-    end*/
-    //reg [C_AXI_DATA_WIDTH - 1:0]  		wbs_dat_inpBuf_i;
-
-	always @(posedge clk_i)  begin
-       // wbs_dat_inpBuf_i <= ip_buf_rdata;
-        op_buf_awid  <= 1;
-        ip_buf_arid  <= 1;
-    end
-
-	//assign wbs_dat_i = ip_buf_rdata ;
-
-	always @(posedge clk_i or negedge rst_ni)  begin
-        op_buf_wdata <= wbs_dat_o;
-        op_buf_awid  <= 1;
-    	ip_buf_arid  <= 1;
-    end
-
-    //--------------------------------------------------------------
-    //----------AXI4 MASTER PANCHAM INTERACTION--------------END----
-    //--------------------------------------------------------------
-
-
-    //--------------------------------------------------------------
-    //----------AXI4 MASTER DESIGN------------START----
-    //--------------------------------------------------------------
-
-    // function called clogb2 that returns an integer which has the
+`timescale 1 ns / 1 ps
+
+	module myip_verilog_v1_0_M00_AXI #
+	(
+		// Users to add parameters here
+
+		// User parameters ends
+		// Do not modify the parameters beyond this line
+
+		// Base address of targeted slave
+		parameter  C_M_TARGET_SLAVE_BASE_ADDR	= 32'h40000000,
+		// Burst Length. Supports 1, 2, 4, 8, 16, 32, 64, 128, 256 burst lengths
+		parameter integer C_M_AXI_BURST_LEN	= 16,
+		// Thread ID Width
+		parameter integer C_M_AXI_ID_WIDTH	= 1,
+		// Width of Address Bus
+		parameter integer C_M_AXI_ADDR_WIDTH	= 32,
+		// Width of Data Bus
+		parameter integer C_M_AXI_DATA_WIDTH	= 32,
+		// Width of User Write Address Bus
+		parameter integer C_M_AXI_AWUSER_WIDTH	= 0,
+		// Width of User Read Address Bus
+		parameter integer C_M_AXI_ARUSER_WIDTH	= 0,
+		// Width of User Write Data Bus
+		parameter integer C_M_AXI_WUSER_WIDTH	= 0,
+		// Width of User Read Data Bus
+		parameter integer C_M_AXI_RUSER_WIDTH	= 0,
+		// Width of User Response Bus
+		parameter integer C_M_AXI_BUSER_WIDTH	= 0
+	)
+	(
+		// Users to add ports here
+
+		// User ports ends
+		// Do not modify the ports beyond this line
+
+		// Initiate AXI transactions
+		input wire  INIT_AXI_TXN,
+		// Asserts when transaction is complete
+		output wire  TXN_DONE,
+		// Asserts when ERROR is detected
+		output reg  ERROR,
+		// Global Clock Signal.
+		input wire  M_AXI_ACLK,
+		// Global Reset Singal. This Signal is Active Low
+		input wire  M_AXI_ARESETN,
+		// Master Interface Write Address ID
+		output wire [C_M_AXI_ID_WIDTH-1 : 0] M_AXI_AWID,
+		// Master Interface Write Address
+		output wire [C_M_AXI_ADDR_WIDTH-1 : 0] M_AXI_AWADDR,
+		// Burst length. The burst length gives the exact number of transfers in a burst
+		output wire [7 : 0] M_AXI_AWLEN,
+		// Burst size. This signal indicates the size of each transfer in the burst
+		output wire [2 : 0] M_AXI_AWSIZE,
+		// Burst type. The burst type and the size information, 
+    // determine how the address for each transfer within the burst is calculated.
+		output wire [1 : 0] M_AXI_AWBURST,
+		// Lock type. Provides additional information about the
+    // atomic characteristics of the transfer.
+		output wire  M_AXI_AWLOCK,
+		// Memory type. This signal indicates how transactions
+    // are required to progress through a system.
+		output wire [3 : 0] M_AXI_AWCACHE,
+		// Protection type. This signal indicates the privilege
+    // and security level of the transaction, and whether
+    // the transaction is a data access or an instruction access.
+		output wire [2 : 0] M_AXI_AWPROT,
+		// Quality of Service, QoS identifier sent for each write transaction.
+		output wire [3 : 0] M_AXI_AWQOS,
+		// Optional User-defined signal in the write address channel.
+		output wire [C_M_AXI_AWUSER_WIDTH-1 : 0] M_AXI_AWUSER,
+		// Write address valid. This signal indicates that
+    // the channel is signaling valid write address and control information.
+		output wire  M_AXI_AWVALID,
+		// Write address ready. This signal indicates that
+    // the slave is ready to accept an address and associated control signals
+		input wire  M_AXI_AWREADY,
+		// Master Interface Write Data.
+		output wire [C_M_AXI_DATA_WIDTH-1 : 0] M_AXI_WDATA,
+		// Write strobes. This signal indicates which byte
+    // lanes hold valid data. There is one write strobe
+    // bit for each eight bits of the write data bus.
+		output wire [C_M_AXI_DATA_WIDTH/8-1 : 0] M_AXI_WSTRB,
+		// Write last. This signal indicates the last transfer in a write burst.
+		output wire  M_AXI_WLAST,
+		// Optional User-defined signal in the write data channel.
+		output wire [C_M_AXI_WUSER_WIDTH-1 : 0] M_AXI_WUSER,
+		// Write valid. This signal indicates that valid write
+    // data and strobes are available
+		output wire  M_AXI_WVALID,
+		// Write ready. This signal indicates that the slave
+    // can accept the write data.
+		input wire  M_AXI_WREADY,
+		// Master Interface Write Response.
+		input wire [C_M_AXI_ID_WIDTH-1 : 0] M_AXI_BID,
+		// Write response. This signal indicates the status of the write transaction.
+		input wire [1 : 0] M_AXI_BRESP,
+		// Optional User-defined signal in the write response channel
+		input wire [C_M_AXI_BUSER_WIDTH-1 : 0] M_AXI_BUSER,
+		// Write response valid. This signal indicates that the
+    // channel is signaling a valid write response.
+		input wire  M_AXI_BVALID,
+		// Response ready. This signal indicates that the master
+    // can accept a write response.
+		output wire  M_AXI_BREADY,
+		// Master Interface Read Address.
+		output wire [C_M_AXI_ID_WIDTH-1 : 0] M_AXI_ARID,
+		// Read address. This signal indicates the initial
+    // address of a read burst transaction.
+		output wire [C_M_AXI_ADDR_WIDTH-1 : 0] M_AXI_ARADDR,
+		// Burst length. The burst length gives the exact number of transfers in a burst
+		output wire [7 : 0] M_AXI_ARLEN,
+		// Burst size. This signal indicates the size of each transfer in the burst
+		output wire [2 : 0] M_AXI_ARSIZE,
+		// Burst type. The burst type and the size information, 
+    // determine how the address for each transfer within the burst is calculated.
+		output wire [1 : 0] M_AXI_ARBURST,
+		// Lock type. Provides additional information about the
+    // atomic characteristics of the transfer.
+		output wire  M_AXI_ARLOCK,
+		// Memory type. This signal indicates how transactions
+    // are required to progress through a system.
+		output wire [3 : 0] M_AXI_ARCACHE,
+		// Protection type. This signal indicates the privilege
+    // and security level of the transaction, and whether
+    // the transaction is a data access or an instruction access.
+		output wire [2 : 0] M_AXI_ARPROT,
+		// Quality of Service, QoS identifier sent for each read transaction
+		output wire [3 : 0] M_AXI_ARQOS,
+		// Optional User-defined signal in the read address channel.
+		output wire [C_M_AXI_ARUSER_WIDTH-1 : 0] M_AXI_ARUSER,
+		// Write address valid. This signal indicates that
+    // the channel is signaling valid read address and control information
+		output wire  M_AXI_ARVALID,
+		// Read address ready. This signal indicates that
+    // the slave is ready to accept an address and associated control signals
+		input wire  M_AXI_ARREADY,
+		// Read ID tag. This signal is the identification tag
+    // for the read data group of signals generated by the slave.
+		input wire [C_M_AXI_ID_WIDTH-1 : 0] M_AXI_RID,
+		// Master Read Data
+		input wire [C_M_AXI_DATA_WIDTH-1 : 0] M_AXI_RDATA,
+		// Read response. This signal indicates the status of the read transfer
+		input wire [1 : 0] M_AXI_RRESP,
+		// Read last. This signal indicates the last transfer in a read burst
+		input wire  M_AXI_RLAST,
+		// Optional User-defined signal in the read address channel.
+		input wire [C_M_AXI_RUSER_WIDTH-1 : 0] M_AXI_RUSER,
+		// Read valid. This signal indicates that the channel
+    // is signaling the required read data.
+		input wire  M_AXI_RVALID,
+		// Read ready. This signal indicates that the master can
+    // accept the read data and response information.
+		output wire  M_AXI_RREADY
+	);
+
+
+	// function called clogb2 that returns an integer which has the
 	//value of the ceiling of the log base 2
 
-    // function called clogb2 that returns an integer which has the 
-    // value of the ceiling of the log base 2.                      
-    function integer clogb2 (input integer bit_depth);              
-    begin                                                           
-    for(clogb2=0; bit_depth>0; clogb2=clogb2+1)                   
-        bit_depth = bit_depth >> 1;                                 
-    end                                                           
-    endfunction                                                     
+	  // function called clogb2 that returns an integer which has the 
+	  // value of the ceiling of the log base 2.                      
+	  function integer clogb2 (input integer bit_depth);              
+	  begin                                                           
+	    for(clogb2=0; bit_depth>0; clogb2=clogb2+1)                   
+	      bit_depth = bit_depth >> 1;                                 
+	    end                                                           
+	  endfunction                                                     
 
 	// C_TRANSACTIONS_NUM is the width of the index counter for 
 	// number of write or read transaction.
-	localparam integer C_TRANSACTIONS_NUM = clogb2(C_M_AXI_BURST_LEN-1);
+	 localparam integer C_TRANSACTIONS_NUM = clogb2(C_M_AXI_BURST_LEN-1);
 
 	// Burst length for transactions, in C_M_AXI_DATA_WIDTHs.
 	// Non-2^n lengths will eventually cause bursts across 4K address boundaries.
-	localparam integer C_MASTER_LENGTH	= 12;
+	 localparam integer C_MASTER_LENGTH	= 12;
 	// total number of burst transfers is master length divided by burst length and burst size
-	localparam integer C_NO_BURSTS_REQ = C_MASTER_LENGTH-clogb2((C_M_AXI_BURST_LEN*C_M_AXI_DATA_WIDTH/8)-1);
-	initial begin
-		$display("C_NO_BURSTS_REQ = %d\n",C_NO_BURSTS_REQ);
-	end
-	
+	 localparam integer C_NO_BURSTS_REQ = C_MASTER_LENGTH-clogb2((C_M_AXI_BURST_LEN*C_M_AXI_DATA_WIDTH/8)-1);
 	// Example State machine to initialize counter, initialize write transactions, 
 	// initialize read transactions and comparison of read data with the 
 	// written data words.
 	parameter [1:0] IDLE = 2'b00, // This state initiates AXI4Lite transaction 
 			// after the state machine changes state to INIT_WRITE 
 			// when there is 0 to 1 transition on INIT_AXI_TXN
-		    INIT_WRITE   = 2'b01, // This state initializes write transaction,
+		INIT_WRITE   = 2'b01, // This state initializes write transaction,
 			// once writes are done, the state machine 
 			// changes state to INIT_READ 
-		    INIT_READ = 2'b10, // This state initializes read transaction
+		INIT_READ = 2'b10, // This state initializes read transaction
 			// once reads are done, the state machine 
 			// changes state to INIT_COMPARE 
-		    INIT_COMPARE = 2'b11; // This state issues the status of comparison 
+		INIT_COMPARE = 2'b11; // This state issues the status of comparison 
 			// of the written data with the read data	
 
-	reg                             [1:0] mst_exec_state;
+	 reg [1:0] mst_exec_state;
 
+	// AXI4LITE signals
 	//AXI4 internal temp signals
 	reg [C_M_AXI_ADDR_WIDTH-1 : 0] 	axi_awaddr;
-	reg  	                        axi_awvalid;
+	reg  	axi_awvalid;
 	reg [C_M_AXI_DATA_WIDTH-1 : 0] 	axi_wdata;
-	reg  	                        axi_wlast;
-	reg  	                        axi_wvalid;
-	reg  	                        axi_bready;
+	reg  	axi_wlast;
+	reg  	axi_wvalid;
+	reg  	axi_bready;
 	reg [C_M_AXI_ADDR_WIDTH-1 : 0] 	axi_araddr;
-	reg  	                        axi_arvalid;
-	reg  	                        axi_rready;
-	
-	reg [C_TRANSACTIONS_NUM : 0] 	write_index; //write beat count in a burst
-	
-	reg [C_TRANSACTIONS_NUM : 0] 	read_index;  //read beat count in a burst
-	
-	wire [C_TRANSACTIONS_NUM+2 : 0] burst_size_bytes; //size of C_M_AXI_BURST_LEN length burst in bytes
-	
-	reg [C_NO_BURSTS_REQ : 0] 	    write_burst_counter; //The burst counters are used to track the number of burst transfers of C_M_AXI_BURST_LEN burst length needed to transfer 2^C_MASTER_LENGTH bytes of data
-	reg [C_NO_BURSTS_REQ : 0] 	    read_burst_counter;
-	reg  	                        start_single_burst_write;
-	reg  	                        start_single_burst_read;
-	reg  	                        writes_done;
-	reg  	                        reads_done;
-	reg  	                        error_reg;
-	reg  	                        compare_done;
-	reg  	                        read_mismatch;
-	reg  	                        burst_write_active;
-	reg  	                        burst_read_active;
+	reg  	axi_arvalid;
+	reg  	axi_rready;
+	//write beat count in a burst
+	reg [C_TRANSACTIONS_NUM : 0] 	write_index;
+	//read beat count in a burst
+	reg [C_TRANSACTIONS_NUM : 0] 	read_index;
+	//size of C_M_AXI_BURST_LEN length burst in bytes
+	wire [C_TRANSACTIONS_NUM+2 : 0] 	burst_size_bytes;
+	//The burst counters are used to track the number of burst transfers of C_M_AXI_BURST_LEN burst length needed to transfer 2^C_MASTER_LENGTH bytes of data.
+	reg [C_NO_BURSTS_REQ : 0] 	write_burst_counter;
+	reg [C_NO_BURSTS_REQ : 0] 	read_burst_counter;
+	reg  	start_single_burst_write;
+	reg  	start_single_burst_read;
+	reg  	writes_done;
+	reg  	reads_done;
+	reg  	error_reg;
+	reg  	compare_done;
+	reg  	read_mismatch;
+	reg  	burst_write_active;
+	reg  	burst_read_active;
 	reg [C_M_AXI_DATA_WIDTH-1 : 0] 	expected_rdata;
-	wire  	                        write_resp_error;
-	wire  	                        read_resp_error;
-	wire  	                        wnext;
-	wire  	                        rnext;
-	reg  	                        init_txn_ff;
-	reg  	                        init_txn_ff2;
-//	reg  	                        init_txn_edge;
-	wire  	                        init_txn_pulse;
+	//Interface response error flags
+	wire  	write_resp_error;
+	wire  	read_resp_error;
+	wire  	wnext;
+	wire  	rnext;
+	reg  	init_txn_ff;
+	reg  	init_txn_ff2;
+	reg  	init_txn_edge;
+	wire  	init_txn_pulse;
 
 
 	// I/O Connections assignments
@@ -667,7 +285,6 @@ module md5_top_axi4lite (
 	assign TXN_DONE	= compare_done;
 	//Burst size in bytes
 	assign burst_size_bytes	= C_M_AXI_BURST_LEN * C_M_AXI_DATA_WIDTH/8;
-
 	assign init_txn_pulse	= (!init_txn_ff2) && init_txn_ff;
 
 
@@ -708,6 +325,7 @@ module md5_top_axi4lite (
 	      begin                                                            
 	        axi_awvalid <= 1'b0;                                           
 	      end                                                              
+	    // If previously not valid , start next transaction                
 	    else if (~axi_awvalid && start_single_burst_write)                 
 	      begin                                                            
 	        axi_awvalid <= 1'b1;                                           
@@ -732,8 +350,7 @@ module md5_top_axi4lite (
 	      end                                                              
 	    else if (M_AXI_AWREADY && axi_awvalid)                             
 	      begin                                                            
-	        //MR axi_awaddr <= axi_awaddr + burst_size_bytes; 
-            axi_awaddr <= md5_reg2;                  
+	        axi_awaddr <= axi_awaddr + burst_size_bytes;                   
 	      end                                                              
 	    else                                                               
 	      axi_awaddr <= axi_awaddr;                                        
@@ -762,6 +379,7 @@ module md5_top_axi4lite (
 	//with threshold counters as part of the user logic, to make sure neither 
 	//channel gets too far ahead of each other.
 
+	//Forward movement occurs when the write channel is valid and ready
 
 	  assign wnext = M_AXI_WREADY & axi_wvalid;                                   
 	                                                                                    
@@ -772,6 +390,7 @@ module md5_top_axi4lite (
 	      begin                                                                         
 	        axi_wvalid <= 1'b0;                                                         
 	      end                                                                           
+	    // If previously not valid, start next transaction                              
 	    else if (~axi_wvalid && start_single_burst_write)                               
 	      begin                                                                         
 	        axi_wvalid <= 1'b1;                                                         
@@ -803,6 +422,7 @@ module md5_top_axi4lite (
 	        axi_wlast <= 1'b1;                                                          
 	      end                                                                           
 	    // Deassrt axi_wlast when the last write data has been                          
+	    // accepted by the slave with a valid response                                  
 	    else if (wnext)                                                                 
 	      axi_wlast <= 1'b0;                                                            
 	    else if (axi_wlast && C_M_AXI_BURST_LEN == 1)                                   
@@ -838,8 +458,7 @@ module md5_top_axi4lite (
 	    //else if (wnext && axi_wlast)                                                  
 	    //  axi_wdata <= 'b0;                                                           
 	    else if (wnext)                                                                 
-	      //MR axi_wdata <= axi_wdata + 1;  
-          axi_wdata <= op_buf_wdata;                                                 
+	      axi_wdata <= axi_wdata + 1;                                                   
 	    else                                                                            
 	      axi_wdata <= axi_wdata;                                                       
 	    end                                                                             
@@ -907,6 +526,7 @@ module md5_top_axi4lite (
 	      begin                                                          
 	        axi_arvalid <= 1'b0;                                         
 	      end                                                            
+	    // If previously not valid , start next transaction              
 	    else if (~axi_arvalid && start_single_burst_read)                
 	      begin                                                          
 	        axi_arvalid <= 1'b1;                                         
@@ -925,17 +545,14 @@ module md5_top_axi4lite (
 	  begin                                                              
 	    if (M_AXI_ARESETN == 0 || init_txn_pulse == 1'b1)                                          
 	      begin                                                          
-	        axi_araddr <= 'b0;                                        
+	        axi_araddr <= 'b0;                                           
 	      end                                                            
 	    else if (M_AXI_ARREADY && axi_arvalid)                           
 	      begin                                                          
-	        //MR axi_araddr <= axi_araddr + burst_size_bytes;  
-            axi_araddr <= md5_reg1;               
+	        axi_araddr <= axi_araddr + burst_size_bytes;                 
 	      end                                                            
-	    else 
-		 begin                                                         
-	      axi_araddr <= axi_araddr;
-		 end                                      
+	    else                                                             
+	      axi_araddr <= axi_araddr;                                      
 	  end                                                                
 
 
@@ -943,6 +560,7 @@ module md5_top_axi4lite (
 	//Read Data (and Response) Channel
 	//--------------------------------
 
+	 // Forward movement occurs when the channel is valid and ready   
 	  assign rnext = M_AXI_RVALID && axi_rready;                            
 	                                                                        
 	                                                                        
@@ -989,27 +607,8 @@ module md5_top_axi4lite (
 	           end                                   
 	      end                                        
 	    // retain the previous value                 
-	  end            
-
-
-	//MR adding logic to get the read_data 
-    always @(posedge M_AXI_ACLK)                                          
-	  begin
-		  if(M_AXI_ARESETN == 0 || init_txn_pulse == 1'b1 ) 
-		   begin
-			   ip_buf_rdata <= 0;
-		   end
-		  else if(M_AXI_RVALID && axi_rready) 
-		   begin
-			   ip_buf_rdata <= M_AXI_RDATA;
-		   end
-		  else 
-		   begin
-			   ip_buf_rdata <= ip_buf_rdata;
-		   end
-      end
-
-
+	  end                                            
+	                                                                        
 	//Check received read data against data generator                       
 	  always @(posedge M_AXI_ACLK)                                          
 	  begin                                                                 
@@ -1158,7 +757,7 @@ module md5_top_axi4lite (
 	            // number of clock cycles.                                                                      
 	            if ( init_txn_pulse == 1'b1)                                                      
 	              begin                                                                                         
-	                mst_exec_state  <= INIT_READ;                                                              
+	                mst_exec_state  <= INIT_WRITE;                                                              
 	                ERROR <= 1'b0;
 	                compare_done <= 1'b0;
 	              end                                                                                           
@@ -1174,7 +773,7 @@ module md5_top_axi4lite (
 	            // write controller                                                                             
 	            if (writes_done)                                                                                
 	              begin                                                                                         
-	                mst_exec_state <= INIT_COMPARE;//                                                              
+	                mst_exec_state <= INIT_READ;//                                                              
 	              end                                                                                           
 	            else                                                                                            
 	              begin                                                                                         
@@ -1197,7 +796,7 @@ module md5_top_axi4lite (
 	            // read controller                                                                              
 	            if (reads_done)                                                                                 
 	              begin                                                                                         
-	                mst_exec_state <= INIT_WRITE;                                                             
+	                mst_exec_state <= INIT_COMPARE;                                                             
 	              end                                                                                           
 	            else                                                                                            
 	              begin                                                                                         
@@ -1295,14 +894,15 @@ module md5_top_axi4lite (
 	                                                                                                            
 	    //The reads_done should be associated with a rready response                                            
 	    //else if (M_AXI_BVALID && axi_bready && (write_burst_counter == {(C_NO_BURSTS_REQ-1){1}}) && axi_wlast)
-	    else if (M_AXI_RVALID && axi_rready) //MR// && (read_index == C_M_AXI_BURST_LEN-1) && (read_burst_counter[C_NO_BURSTS_REQ]))
+	    else if (M_AXI_RVALID && axi_rready && (read_index == C_M_AXI_BURST_LEN-1) && (read_burst_counter[C_NO_BURSTS_REQ]))
 	      reads_done <= 1'b1;                                                                                   
 	    else                                                                                                    
 	      reads_done <= reads_done;                                                                             
 	    end                                                                                                     
 
+	// Add user logic here
 
+	// User logic ends
 
+	endmodule
 
-
-endmodule   // end md5_top_axi4lite
